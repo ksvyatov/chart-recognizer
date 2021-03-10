@@ -1,0 +1,9 @@
+numpy=1.19.2
+scipy=1.6.0
+opencv-python
+tqdm
+tensorflow-gpu=1.15
+keras=2.3.1
+pytesseract
+torch
+matplotlib

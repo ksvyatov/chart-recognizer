@@ -1,0 +1,9 @@
+/.ipynb_checkpoints/
+/trained_models/
+/keras-frcnn/
+/logs/
+*.zip
+*.tar.gz
+/__pycache__/
+/data/
+/.idea/

@@ -1,0 +1,205 @@
+from __future__ import print_function
+from random import random
+import os
+import tensorflow as tf
+#from albumentations import resize
+from matplotlib.pyplot import imshow
+from tensorflow.python.keras import backend as K
+from tensorflow.python.keras.callbacks import EarlyStopping, ModelCheckpoint
+from tensorflow.python.keras.models import load_model
+from tensorflow.python.keras.preprocessing.image import load_img
+from matplotlib import pyplot as plt
+#from tqdm.keras import TqdmCallback
+
+from datapreparation import resize_images_unet as rs
+from arearecognizer import model_unet as m
+import numpy as np
+from tensorflow.python.keras.preprocessing import image
+from sys import getsizeof, stderr
+from itertools import chain
+from collections import deque
+
+
+BATCH_SIZE = 10
+CLASS_NAMES = ["Title", "xdata", "ydata", "xlabel", "ylabel", "xpoints", "ypoints"]
+
+def unison_shuffled_copies(a, b):
+    p = np.random.permutation(a.shape[0])
+    return a[p], b[p]
+
+# Define IoU metric
+def mean_iou(y_true, y_pred):
+    prec = []
+    for t in np.arange(0.5, 1.0, 0.05):
+        y_pred_ = tf.to_int32(y_pred > t)
+        score, up_opt = tf.metrics.mean_iou(y_true, y_pred_, 2)
+        K.get_session().run(tf.local_variables_initializer())
+        with tf.control_dependencies([up_opt]):
+            score = tf.identity(score)
+        prec.append(score)
+    return K.mean(K.stack(prec), axis=0)
+
+def test_data():
+    model = load_model('model-plots.h5', custom_objects={'mean_iou': mean_iou})
+    preds_train = model.predict(X_train[:int(X_train.shape[0]*0.9)], verbose=1)
+    preds_val = model.predict(X_train[int(X_train.shape[0]*0.9):], verbose=1)
+    preds_test = model.predict(X_test, verbose=1)
+
+    # Threshold predictions
+    preds_train_t = (preds_train > 0.5).astype(np.uint8)
+    preds_val_t = (preds_val > 0.5).astype(np.uint8)
+    preds_test_t = (preds_test > 0.5).astype(np.uint8)
+
+    # Create list of upsampled test masks
+    # preds_test_upsampled = []
+    # for i in range(len(preds_test)):
+    #     preds_test_upsampled.append(resize(np.squeeze(preds_test[i]),
+    #                                        (512, 512),
+    #                                        mode='constant', preserve_range=True))
+    # ix = random.randint(0, len(preds_train_t))
+    # imshow(X_train[ix])
+    # plt.show()
+    # imshow(np.squeeze(Y_train[ix]))
+    # plt.show()
+    # imshow(np.squeeze(preds_train_t[ix]))
+    # plt.show()
+
+def total_size(o, handlers={}, verbose=False):
+    """ Returns the approximate memory footprint an object and all of its contents.
+
+    Automatically finds the contents of the following builtin containers and
+    their subclasses:  tuple, list, deque, dict, set and frozenset.
+    To search other containers, add handlers to iterate over their contents:
+
+        handlers = {SomeContainerClass: iter,
+                    OtherContainerClass: OtherContainerClass.get_elements}
+
+    """
+    dict_handler = lambda d: chain.from_iterable(d.items())
+    all_handlers = {tuple: iter,
+                    list: iter,
+                    deque: iter,
+                    dict: dict_handler,
+                    set: iter,
+                    frozenset: iter,
+                   }
+    all_handlers.update(handlers)     # user handlers take precedence
+    seen = set()                      # track which object id's have already been seen
+    default_size = getsizeof(0)       # estimate sizeof object without __sizeof__
+
+    def sizeof(o):
+        if id(o) in seen:       # do not double count the same object
+            return 0
+        seen.add(id(o))
+        s = getsizeof(o, default_size)
+
+        if verbose:
+            print(s, type(o), repr(o), file=stderr)
+
+        for typ, handler in all_handlers.items():
+            if isinstance(o, typ):
+                s += sum(map(sizeof, handler(o)))
+                break
+        return s
+
+    return sizeof(o)
+
+
+if __name__ == "__main__":
+    np.random.seed(10)
+    seed = 42
+
+    model = m.Unet()
+    optimizer = tf.keras.optimizers.SGD(lr=0.0001, momentum=0.9)
+    loss = tf.keras.losses.categorical_crossentropy
+    metrics = [tf.keras.metrics.categorical_accuracy]
+    model.compile(optimizer, loss, metrics)
+    print(model.summary())
+
+
+    base_path = os.path.join(os.path.dirname(os.path.realpath(__file__)), "../data/recognizer/imgs/")
+    imgs = os.listdir(base_path + "resized")
+    X = np.zeros((len(imgs), 512, 512, 3))
+    Y = np.zeros((len(imgs), 512, 512, len(CLASS_NAMES)))
+    for i, filename in (enumerate(os.listdir(base_path + "resized"))):
+        x_img = load_img(base_path + "resized/" + filename)
+        #x_img = np.array(Image.open(base_path + "resized/" + filename))
+        #x_img = cv2.imread(base_path + "resized/" + filename)
+        X[i] = x_img
+        Y[i] = rs.create_output_masked_tensor(filename, CLASS_NAMES)
+
+    #X, Y = unison_shuffled_copies(X, Y)
+
+    X_train = X[:int(X.shape[0] * 0.7)]
+    X_test = X[int(X.shape[0] * 0.7):]
+    Y_train = X[:int(Y.shape[0] * 0.7)]
+    Y_test = X[int(Y.shape[0] * 0.7):]
+    image_datagen = image.ImageDataGenerator(
+        shear_range=0.5,
+        rotation_range=20,
+        zoom_range=0.1,
+        width_shift_range=0.9,
+        height_shift_range=0.9,
+        fill_mode='reflect'
+    )
+    mask_datagen = image.ImageDataGenerator(
+        shear_range=0.5,
+        rotation_range=20,
+        zoom_range=0.1,
+        width_shift_range=0.9,
+        height_shift_range=0.9,
+        fill_mode='reflect'
+    )
+
+    image_datagen.fit(X_train[:int(X_train.shape[0] * 0.9)], augment=True, seed=seed)
+    mask_datagen.fit(Y_train[:int(Y_train.shape[0] * 0.9)], augment=True, seed=seed)
+
+    print('starting image generation')
+#    x = image_datagen.flow(X_train[:int(X_train.shape[0] * 0.9)], batch_size=BATCH_SIZE, shuffle=True, seed=seed, save_to_dir=base_path + "aug/x/", save_format="png")
+#    y = mask_datagen.flow(Y_train[:int(Y_train.shape[0] * 0.9)], batch_size=BATCH_SIZE, shuffle=True, seed=seed, save_to_dir=base_path + "aug/y/", save_format="png")
+    x = image_datagen.flow(X_train[:int(X_train.shape[0] * 0.9)], batch_size=BATCH_SIZE, shuffle=True, seed=seed)
+    y = mask_datagen.flow(Y_train[:int(Y_train.shape[0] * 0.9)], batch_size=BATCH_SIZE, shuffle=True, seed=seed)
+
+    # Creating the validation Image and Mask generator
+    image_datagen_val = image.ImageDataGenerator()
+    mask_datagen_val = image.ImageDataGenerator()
+
+    image_datagen_val.fit(X_train[int(X_train.shape[0] * 0.9):], augment=True, seed=seed)
+    mask_datagen_val.fit(Y_train[int(Y_train.shape[0] * 0.9):], augment=True, seed=seed)
+
+    x_val = image_datagen_val.flow(X_train[int(X_train.shape[0] * 0.9):], batch_size=BATCH_SIZE, shuffle=True,
+                                   seed=seed)
+    y_val = mask_datagen_val.flow(Y_train[int(Y_train.shape[0] * 0.9):], batch_size=BATCH_SIZE, shuffle=True,
+                                  seed=seed)
+#    x_val = image_datagen_val.flow(X_train[int(X_train.shape[0] * 0.9):], batch_size=BATCH_SIZE, shuffle=True,
+#                                   seed=seed, save_to_dir=base_path + "aug/xval/", save_format="png")
+#    y_val = mask_datagen_val.flow(Y_train[int(Y_train.shape[0] * 0.9):], batch_size=BATCH_SIZE, shuffle=True,
+#                                  seed=seed, save_to_dir=base_path + "aug/yval/", save_format="png")
+
+    print(f'size of X {total_size(X)}; Y: {total_size(X)}; x_val: {total_size(x_val)}; x: {total_size(x)}')
+    # Checking if the images fit
+
+    #
+    #
+    # imshow(x.next()[0].astype(np.uint8))
+    # plt.show()
+    # imshow(np.squeeze(y.next()[0].astype(np.uint8)))
+    # plt.show()
+    # imshow(x_val.next()[0].astype(np.uint8))
+    # plt.show()
+    # imshow(np.squeeze(y_val.next()[0].astype(np.uint8)))
+    # plt.show()
+
+    train_generator = zip(x, y)
+    val_generator = zip(x_val, y_val)
+
+    earlystopper = EarlyStopping(patience=3, verbose=1)
+    checkpointer = ModelCheckpoint('model-plots.h5', verbose=1, save_best_only=True)
+    results = model.fit(train_generator, validation_data=val_generator, validation_steps=10,
+                                  steps_per_epoch=250,
+                                  batch_size=64,
+                                  epochs=3, callbacks=[earlystopper, checkpointer])
+
+#    results = model.fit(train_generator, validation_data=val_generator, validation_steps=10,
+#                                  steps_per_epoch=250,
+#                                  epochs=3, callbacks=[earlystopper, checkpointer, TqdmCallback(verbose=2)], verbose=0)

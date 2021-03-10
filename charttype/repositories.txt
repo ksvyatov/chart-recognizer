@@ -1,0 +1,3 @@
+Распознавание 8 типов графиков
+bar graph -1 chart - 2 block diagram -3 chart - 4 growth graph - 5 pie chart - 6 table - 7 just images - 0
+https://github.com/Grigorii-24/Graph-and-Chart-Recognition
