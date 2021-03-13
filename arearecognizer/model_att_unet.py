@@ -249,8 +249,8 @@ def r2_unet(img_w, img_h, n_label, data_format='channels_first'):
 def att_r2_unet(img_w, img_h, n_label, data_format='channels_first', need_compile=False):
     inputs = Input((3, img_w, img_h))
     x = inputs
-    depth = 6
-    features = 16#64
+    depth = 4
+    features = 64#64
     skips = []
     for i in range(depth):
         x = rec_res_block(x, features, data_format=data_format, batch_normalization=True)

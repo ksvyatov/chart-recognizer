@@ -163,7 +163,7 @@ def train_model():
     tensorboard_callback = keras.callbacks.TensorBoard(log_dir=log_dir, histogram_freq=0)
 
     print('start training process')
-    batch_size = 4
+    batch_size = 1
     params= {'dim': (512,512),
           'batch_size': batch_size,
           'n_classes': len(CLASS_NAMES),

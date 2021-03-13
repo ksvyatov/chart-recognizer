@@ -127,7 +127,7 @@ def detect_text(src_img, preds, positions, channel_num = 0):
             sel_idx.append(i)
     return sel_idx
 
-def detect_points(src_img, preds, is_x_axis=True, need_display=False):
+def detect_points(src_img, preds, eps=1.0, is_x_axis=True, need_display=False):
     '''
     Detect points for plot scaling
     @param src_img: source image
@@ -164,11 +164,11 @@ def detect_points(src_img, preds, is_x_axis=True, need_display=False):
         y_idx = (np.abs(y_vals - np.mean(y_vals))).argmin()
         x_line = int(x_vals[x_idx])
         y_line = int(y_vals[y_idx])
-
+        thresh = 7
         # sliding window for finding crosses
         if is_x_axis:
-            x_points = [(np.mean(img[y_line - 7: y_line + 7, i] / 255)) for i in range(x, x + w)]
-            points = [(i, pos) for i, pos in enumerate(x_points) if pos < np.mean(x_points) / 1.2]
+            x_points = [(np.mean(img[y_line - thresh: y_line + thresh, i] / 255)) for i in range(x, x + w)]
+            points = [(i, pos) for i, pos in enumerate(x_points) if pos < np.mean(x_points) / eps]
             points = filter_points(points, x)
             #print('x points ', points)
             if need_display:
@@ -177,8 +177,8 @@ def detect_points(src_img, preds, is_x_axis=True, need_display=False):
                     cv2.line(img, (int(i[0]), 0), (int(i[0]), 512), (0, 255, 0), 1, cv2.LINE_AA)
                 cv2.line(img, (0, y_line), (512, y_line), (255, 0, 0), 1, cv2.LINE_AA)
         else:
-            y_points = [(np.mean(img[i, x_line - 7: x_line + 7] / 255)) for i in range(y, y + h)]
-            points = [(i, pos) for i, pos in enumerate(y_points) if pos < np.mean(y_points) / 1.2]
+            y_points = [(np.mean(img[i, x_line - thresh: x_line + thresh] / 255)) for i in range(y, y + h)]
+            points = [(i, pos) for i, pos in enumerate(y_points) if pos < np.mean(y_points) / eps]
             points = filter_points(points, y)
             if need_display:
                 for i in points:
@@ -190,7 +190,7 @@ def detect_points(src_img, preds, is_x_axis=True, need_display=False):
         plt.figure(figsize=(10, 10))
         plt.imshow(img)
         plt.plot()
-    #print('points', points)
+    print('points len', len(points))
     return points
 
 def calc_axis_scale(points, texts, text_positions, is_x_axis=True):
@@ -273,7 +273,7 @@ def recognize_axis(img, config):
     optimizer = tf.keras.optimizers.SGD(lr=1e-7)
     metrics = [tf.keras.metrics.categorical_accuracy]
     model.compile(optimizer, loss, metrics)
-    # print(model.summary())
+    print(model.summary())
 
     img_mask = resizer.resize_image(img_mask)
     if n_channels == 1:
@@ -300,12 +300,6 @@ def recognize_axis(img, config):
         preds_test_upsampled.append(np.squeeze(preds_train[i]))
 
     #print(preds_train_t[0, 0, :, :].shape)
-    x_points = detect_points(img_mask, preds_train_t, is_x_axis=True, need_display=True)
-    y_points = detect_points(img_mask, preds_train_t, is_x_axis=False, need_display=True)
-    for p in x_points:
-        cv2.rectangle(img_mask, (p[0] - 10, p[1] - 10), (p[0] + 10, p[1] + 10), (255, 0, 0), -1)
-    for p in y_points:
-        cv2.rectangle(img_mask, (p[1] - 10, p[0] - 10), (p[1] + 10, p[0] + 10), (255, 0, 0), -1)
 
     img_threshoulded = pt.pre_processing(img)
     texts, texts_pos = pt.parse_text(img_threshoulded, config)
@@ -333,8 +327,20 @@ def recognize_axis(img, config):
     print('yvals', y_vals)
     print('xlabel', xlabel)
     print('ylabel', ylabel)
-    x_scale = calc_axis_scale(x_points, x_vals, [texts_pos[i] for i in x_vals_idx], is_x_axis=True)
-    y_scale = calc_axis_scale(y_points, y_vals, [texts_pos[i] for i in y_vals_idx], is_x_axis=False)
+    for e in [1.0, 1.1, 1.2, 1.3]:
+        x_points = detect_points(img_mask, preds_train_t, eps=e, is_x_axis=True, need_display=True)
+        y_points = detect_points(img_mask, preds_train_t, eps=e, is_x_axis=False, need_display=True)
+        x_scale = calc_axis_scale(x_points, x_vals, [texts_pos[i] for i in x_vals_idx], is_x_axis=True)
+        y_scale = calc_axis_scale(y_points, y_vals, [texts_pos[i] for i in y_vals_idx], is_x_axis=False)
+        print('x_scale, y_scale', x_scale, y_scale)
+        if abs(x_scale[0]) > 0 and abs(y_scale[0]) > 0:
+            print('non zero scale found')
+            break
+
+    for p in x_points:
+        cv2.rectangle(img_mask, (p[0] - 10, p[1] - 10), (p[0] + 10, p[1] + 10), (255, 0, 0), -1)
+    for p in y_points:
+        cv2.rectangle(img_mask, (p[1] - 10, p[0] - 10), (p[1] + 10, p[0] + 10), (255, 0, 0), -1)
     print('x  scale:', x_scale)
     print('y  scale:', y_scale)
 
@@ -376,10 +382,16 @@ def recognize(input_img, config):
     colors = ['r-', 'g-', 'b-', 'k-', 'm-', 'c-']
     for i, plot in enumerate(plots):
         x_vals, y_vals, y2_vals = [], [], []
-        for x in plot[0]:
-            x_vals.append((x * scale_orig - x_scale[1]) / x_scale[0])
-        for y2 in plot[2]:
-            y2_vals.append((y2 * scale_orig - y_scale[1]) / y_scale[0])
+        if abs(x_scale[0]) > 0:
+            for x in plot[0]:
+                x_vals.append((x * scale_orig - x_scale[1]) / x_scale[0])
+        else:
+            x_vals = plot[0]
+        if abs(y_scale[0]) > 0:
+            for y2 in plot[2]:
+                y2_vals.append((y2 * scale_orig - y_scale[1]) / y_scale[0])
+        else:
+            y2_vals = plot[2]
         y2_vals = np.array(y2_vals)
         y2_vals = np.max(y2_vals) - y2_vals #+ np.min(y2_vals)
         fig, ax = plt.subplots()
